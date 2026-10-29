@@ -1,0 +1,19 @@
+{
+  "name": "campus-hub-pro",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "generate-vapid": "web-push generate-vapid-keys"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.0",
+    "vite": "^7.1.7"
+  },
+  "devDependencies": {
+    "web-push": "^3.6.7"
+  }
+}
