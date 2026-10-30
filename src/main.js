@@ -150,12 +150,86 @@ async function removeTask(id) {
   if(error){notice(error.message,'error');return;}toast('Task deleted');await loadTasks();
 }
 async function createTeam(e) {
-  e.preventDefault();const name=$('#team-name').value.trim(),description=$('#team-description').value.trim();if(!name)return;
-  const {data,error}=await supabase.from('teams').insert({name,description,created_by:user.id}).select().single();
-  if(error){notice(`Could not create team: ${error.message}`,'error');return;}
-  const {error:memberError}=await supabase.from('team_members').insert({team_id:data.id,user_id:user.id,role:'owner'});
-  if(memberError){notice(`Team created, but membership failed: ${memberError.message}`,'error');return;}
-  $('#create-team-form').reset();await loadTeams();toast('Team created');notice(`Share invite code ${data.invite_code} with your teammates.`,'success');
+  e.preventDefault();
+
+  const name = $('#team-name').value.trim();
+  const description = $('#team-description').value.trim();
+
+  if (!name) {
+    notice('Please enter a team name.', 'error');
+    return;
+  }
+
+  try {
+    // Verify the currently signed-in user.
+    const {
+      data: { user: currentUser },
+      error: userError
+    } = await supabase.auth.getUser();
+
+    if (userError || !currentUser) {
+      notice('Please sign in before creating a team.', 'error');
+      return;
+    }
+
+    // Generate a unique invite code.
+    const invite_code = crypto.randomUUID()
+      .replace(/-/g, '')
+      .slice(0, 10)
+      .toUpperCase();
+
+    // Create the team.
+    const { data, error } = await supabase
+      .from('teams')
+      .insert({
+        name,
+        description,
+        invite_code,
+        created_by: currentUser.id
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Team creation failed:', error);
+      notice(`Could not create team: ${error.message}`, 'error');
+      return;
+    }
+
+    // Add the creator as the team owner.
+    const { error: memberError } = await supabase
+      .from('team_members')
+      .insert({
+        team_id: data.id,
+        user_id: currentUser.id,
+        role: 'owner'
+      });
+
+    if (memberError) {
+      console.error('Team membership creation failed:', memberError);
+      notice(
+        `Team created, but membership failed: ${memberError.message}`,
+        'error'
+      );
+      return;
+    }
+
+    $('#create-team-form').reset();
+    await loadTeams();
+
+    toast('Team created');
+    notice(
+      `Share invite code ${data.invite_code} with your teammates.`,
+      'success'
+    );
+
+  } catch (error) {
+    console.error('Unexpected team creation error:', error);
+    notice(
+      `Could not create team: ${error.message || 'Unexpected error'}`,
+      'error'
+    );
+  }
 }
 async function joinTeam(e) {
   e.preventDefault();const code=$('#invite-code').value.trim().toUpperCase();if(!code)return;
