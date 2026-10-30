@@ -169,21 +169,102 @@ async function saveProfile(e) {
   if(error){notice(`Could not save profile: ${error.message}`,'error');return;}
   await loadProfile();toast('Profile saved');
 }
+
+/* Corrected push notification setup */
 async function enablePush() {
-  if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window)){notice('This browser does not support Web Push. Try a recent version of Chrome, Edge, Firefox or Safari.','error');return;}
-  const publicKey=import.meta.env.VITE_VAPID_PUBLIC_KEY;
-  if(!publicKey||publicKey.includes('YOUR_')){notice('Push setup is incomplete. Add VITE_VAPID_PUBLIC_KEY to .env and configure the send-push Edge Function using the README.','info');return;}
+  if (!supabase || !user) {
+    notice('Please sign in before enabling push notifications.', 'error');
+    return;
+  }
+
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    notice('This browser does not support Web Push. Try a recent version of Chrome, Edge, Firefox or Safari.', 'error');
+    return;
+  }
+
+  if (!window.isSecureContext) {
+    notice('Push notifications require HTTPS (or localhost during development). Open the secure version of your website and try again.', 'error');
+    return;
+  }
+
+  const publicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+  if (!publicKey || publicKey.includes('YOUR_')) {
+    notice('Push setup is incomplete. Add your real VITE_VAPID_PUBLIC_KEY to your environment variables and configure the send-push Edge Function.', 'info');
+    return;
+  }
+
   try {
-    const permission=await Notification.requestPermission();
-    if(permission!=='granted'){toast('Notification permission was not granted.');return;}
-    const reg=await navigator.serviceWorker.register('/sw.js');
-    const subscription=await reg.pushManager.getSubscription()||await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:base64ToBytes(publicKey)});
-    const {error}=await supabase.from('push_subscriptions').upsert({user_id:user.id,endpoint:subscription.endpoint,subscription:subscription.toJSON()},{onConflict:'endpoint'});
-    if(error)throw error;
-    toast('Push notifications enabled on this device');notice('Push is enabled. A deployed server-side function can now send notifications to this device.','success');
-  } catch(err){notice(`Could not enable push: ${err.message||err}`,'error');}
+    // Validate the VAPID public key before requesting browser permission.
+    const applicationServerKey = base64ToBytes(publicKey);
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      toast('Notification permission was not granted.');
+      return;
+    }
+
+    const registration = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey
+      });
+    }
+
+    const { error } = await supabase
+      .from('push_subscriptions')
+      .upsert({
+        user_id: user.id,
+        endpoint: subscription.endpoint,
+        subscription: subscription.toJSON()
+      }, { onConflict: 'endpoint' });
+
+    if (error) throw error;
+
+    toast('Push notifications enabled on this device');
+    notice('Push is enabled. A deployed server-side function can now send notifications to this device.', 'success');
+  } catch (err) {
+    console.error('Could not enable push notifications:', err);
+    notice(`Could not enable push: ${err?.message || String(err)}`, 'error');
+  }
 }
-function base64ToBytes(s){const pad='='.repeat((4-s.length%4)%4),raw=atob((s+pad).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
+
+function base64ToBytes(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('VITE_VAPID_PUBLIC_KEY is empty. Add the VAPID public key to your environment variables.');
+  }
+
+  // VAPID public keys use Base64URL. Reject labels, quotes, and other invalid characters.
+  const key = value.trim();
+  if (!/^[A-Za-z0-9_-]+={0,2}$/.test(key)) {
+    throw new Error('VITE_VAPID_PUBLIC_KEY must contain only the Base64URL public-key value. Do not include a label, quotes, or the private key.');
+  }
+
+  const unpadded = key.replace(/=+$/, '');
+  if (unpadded.length % 4 === 1) {
+    throw new Error('VITE_VAPID_PUBLIC_KEY has an invalid Base64URL length. Copy the complete VAPID public key and try again.');
+  }
+
+  const base64 = unpadded.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+
+  let raw;
+  try {
+    raw = atob(padded);
+  } catch {
+    throw new Error('VITE_VAPID_PUBLIC_KEY is not valid Base64URL. Copy the public key exactly as generated.');
+  }
+
+  const bytes = Uint8Array.from(raw, character => character.charCodeAt(0));
+  if (bytes.length !== 65 || bytes[0] !== 4) {
+    throw new Error(`VITE_VAPID_PUBLIC_KEY decoded to ${bytes.length} bytes; expected a 65-byte uncompressed P-256 public key. Make sure you copied the VAPID PUBLIC key, not the private key.`);
+  }
+
+  return bytes;
+}
+
 async function signOut(){await supabase.auth.signOut();if(channel)supabase.removeChannel(channel);user=null;$('#workspace').classList.add('hidden');$('#auth').classList.remove('hidden');}
 function bind() {
   $('#auth-switch').addEventListener('click',()=>setAuthMode(authMode==='signin'?'signup':'signin'));
